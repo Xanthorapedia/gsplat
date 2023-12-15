@@ -52,5 +52,5 @@ def compute_cumulative_intersects(
         - **cum_tiles_hit** (Tensor): a tensor of cumulated intersections (used for sorting).
     """
     cum_tiles_hit = torch.cumsum(num_tiles_hit, dim=0, dtype=torch.int32)
-    num_intersects = cum_tiles_hit[-1].item()
+    num_intersects = cum_tiles_hit[-1].item() if len(cum_tiles_hit) > 0 else 0
     return num_intersects, cum_tiles_hit
