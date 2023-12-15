@@ -168,6 +168,7 @@ __global__ void nd_rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
+    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -189,7 +190,7 @@ __global__ void nd_rasterize_forward(
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
-    if (i >= img_size.y || j >= img_size.x) {
+    if (i >= img_size.y || j >= img_size.x || tile_id >= tile_bins_size) {
         return;
     }
 
@@ -249,6 +250,7 @@ __global__ void nd_rasterize_forward(
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -277,7 +279,7 @@ __global__ void rasterize_forward(
 
     // return if out of bounds
     // keep not rasterizing threads around for reading data
-    bool inside = (i < img_size.y && j < img_size.x);
+    bool inside = (i < img_size.y && j < img_size.x && tile_id < tile_bins_size);
     bool done = !inside;
 
     // have all threads in tile process the same gaussians in batches
