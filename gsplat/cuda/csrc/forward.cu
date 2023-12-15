@@ -150,15 +150,13 @@ __global__ void get_tile_bin_edges(
         tile_bins[cur_tile_idx].x = 0;
         return;
     }
-    if (idx == num_intersects - 1) {
-        tile_bins[cur_tile_idx].y = num_intersects;
-        return;
-    }
     int32_t prev_tile_idx = (int32_t)(isect_ids_sorted[idx - 1] >> 32);
     if (prev_tile_idx != cur_tile_idx) {
         tile_bins[prev_tile_idx].y = idx;
         tile_bins[cur_tile_idx].x = idx;
-        return;
+    }
+    if (idx == num_intersects - 1) {
+        tile_bins[cur_tile_idx].y = num_intersects;
     }
 }
 
