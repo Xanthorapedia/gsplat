@@ -33,6 +33,7 @@ __global__ void nd_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
+    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -53,6 +54,7 @@ __global__ void nd_rasterize_backward_kernel(
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
