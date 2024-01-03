@@ -38,12 +38,12 @@ __global__ void nd_rasterize_backward_kernel(
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
-    if (i >= img_size.y || j >= img_size.x || tile_id >= tile_bins_size) {
+    if (i >= img_size.y || j >= img_size.x) {
         return;
     }
 
     // which gaussians get gradients for this pixel
-    int2 range = tile_bins[tile_id];
+    int2 range = tile_id < tile_bins_size ? tile_bins[tile_id] : int2{0, 0};
     // df/d_out for this pixel
     const float *v_out = &(v_output[channels * pix_id]);
     // this is the T AFTER the last gaussian in this pixel
@@ -167,7 +167,7 @@ __global__ void rasterize_backward_kernel(
     const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
     // keep not rasterizing threads around for reading data
-    const bool inside = (i < img_size.y && j < img_size.x && tile_id < tile_bins_size);
+    const bool inside = (i < img_size.y && j < img_size.x);
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = final_Ts[pix_id];
@@ -180,7 +180,7 @@ __global__ void rasterize_backward_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    const int2 range = tile_bins[tile_id];
+    const int2 range = tile_id < tile_bins_size ? tile_bins[tile_id] : int2{0, 0};
     const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
