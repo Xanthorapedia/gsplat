@@ -396,21 +396,25 @@ rasterize_forward_tensor(
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-        tile_bounds_dim3,
-        img_size_dim3,
-        tile_bins_size,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)out_img.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>()
-    );
+    if (gaussian_ids_sorted.size(0) > 0) {
+        rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3,
+            img_size_dim3,
+            tile_bins_size,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>()
+        );
+    } else {
+        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
+    }
 
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
@@ -467,22 +471,26 @@ nd_rasterize_forward_tensor(
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-        tile_bounds_dim3,
-        img_size_dim3,
-        channels,
-        tile_bins_size,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>()
-    );
+    if (gaussian_ids_sorted.size(0) > 0) {
+        nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3,
+            img_size_dim3,
+            channels,
+            tile_bins_size,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            out_img.contiguous().data_ptr<float>(),
+            background.contiguous().data_ptr<float>()
+        );
+    } else {
+        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
+    }
 
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
@@ -549,27 +557,29 @@ std::
         workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
     }
 
-    nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        channels,
-        tile_bins_size,
-        gaussians_ids_sorted.contiguous().data_ptr<int>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        v_output.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>(),
-        workspace.data_ptr<float>()
-    );
+    if (gaussians_ids_sorted.size(0) > 0) {
+        nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
+            tile_bounds,
+            img_size,
+            channels,
+            tile_bins_size,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            background.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            v_output.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_opacity.contiguous().data_ptr<float>(),
+            workspace.data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }
@@ -624,25 +634,27 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
-    rasterize_backward_kernel<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        tile_bins_size,
-        gaussians_ids_sorted.contiguous().data_ptr<int>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)v_output.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        (float3 *)v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>()
-    );
+    if (gaussians_ids_sorted.size(0) > 0) {
+        rasterize_backward_kernel<<<tile_bounds, block>>>(
+            tile_bounds,
+            img_size,
+            tile_bins_size,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)v_output.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            (float3 *)v_colors.contiguous().data_ptr<float>(),
+            v_opacity.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }
