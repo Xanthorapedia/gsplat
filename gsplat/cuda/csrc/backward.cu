@@ -8,7 +8,6 @@ __global__ void nd_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
-    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -43,7 +42,7 @@ __global__ void nd_rasterize_backward_kernel(
     }
 
     // which gaussians get gradients for this pixel
-    int2 range = tile_id < tile_bins_size ? tile_bins[tile_id] : int2{0, 0};
+    int2 range = tile_id < tile_bounds.x * tile_bounds.y ? tile_bins[tile_id] : int2{0, 0};
     // df/d_out for this pixel
     const float *v_out = &(v_output[channels * pix_id]);
     // this is the T AFTER the last gaussian in this pixel
@@ -137,7 +136,6 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const unsigned tile_bins_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -180,7 +178,7 @@ __global__ void rasterize_backward_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    const int2 range = tile_id < tile_bins_size ? tile_bins[tile_id] : int2{0, 0};
+    const int2 range = tile_id < tile_bounds.x * tile_bounds.y ? tile_bins[tile_id] : int2{0, 0};
     const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];

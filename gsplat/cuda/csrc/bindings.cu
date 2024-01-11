@@ -385,7 +385,6 @@ rasterize_forward_tensor(
     const int channels = colors.size(1);
     const int img_width = img_size_dim3.x;
     const int img_height = img_size_dim3.y;
-    const int tile_bins_size = tile_bins.size(0);
 
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
@@ -401,7 +400,6 @@ rasterize_forward_tensor(
         rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
             tile_bounds_dim3,
             img_size_dim3,
-            tile_bins_size,
             gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
             (int2 *)tile_bins.contiguous().data_ptr<int>(),
             (float2 *)xys.contiguous().data_ptr<float>(),
@@ -460,7 +458,6 @@ nd_rasterize_forward_tensor(
     const int channels = colors.size(1);
     const int img_width = img_size_dim3.x;
     const int img_height = img_size_dim3.y;
-    const int tile_bins_size = tile_bins.size(0);
 
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
@@ -477,7 +474,6 @@ nd_rasterize_forward_tensor(
             tile_bounds_dim3,
             img_size_dim3,
             channels,
-            tile_bins_size,
             gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
             (int2 *)tile_bins.contiguous().data_ptr<int>(),
             (float2 *)xys.contiguous().data_ptr<float>(),
@@ -540,7 +536,6 @@ std::
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
-    const int tile_bins_size = tile_bins.size(0);
 
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
@@ -563,7 +558,6 @@ std::
             tile_bounds,
             img_size,
             channels,
-            tile_bins_size,
             gaussians_ids_sorted.contiguous().data_ptr<int>(),
             (int2 *)tile_bins.contiguous().data_ptr<int>(),
             (float2 *)xys.contiguous().data_ptr<float>(),
@@ -627,7 +621,6 @@ std::
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
-    const int tile_bins_size = tile_bins.size(0);
 
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
@@ -639,7 +632,6 @@ std::
         rasterize_backward_kernel<<<tile_bounds, block>>>(
             tile_bounds,
             img_size,
-            tile_bins_size,
             gaussians_ids_sorted.contiguous().data_ptr<int>(),
             (int2 *)tile_bins.contiguous().data_ptr<int>(),
             (float2 *)xys.contiguous().data_ptr<float>(),
