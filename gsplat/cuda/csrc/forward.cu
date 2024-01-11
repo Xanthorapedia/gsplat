@@ -193,7 +193,7 @@ __global__ void nd_rasterize_forward(
     }
 
     // which gaussians to look through in this tile
-    int2 range = tile_id < tile_bounds.x * tile_bounds.y ? tile_bins[tile_id] : int2{0, 0};
+    int2 range = tile_bins[tile_id];
     float T = 1.f;
 
     // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from
@@ -282,7 +282,7 @@ __global__ void rasterize_forward(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    int2 range = tile_id < tile_bounds.x * tile_bounds.y ? tile_bins[tile_id] : int2{0, 0};
+    int2 range = tile_bins[tile_id];
     int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
