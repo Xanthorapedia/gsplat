@@ -888,6 +888,79 @@ def _rasterization(
 #     return render_colors, render_alphas, {}
 
 
+def rasterization_fused(
+    reference_colors: Tensor, # [C, height, width, X]
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    eps2d: float = 0.3,
+    sh_degree: Optional[int] = None,
+    packed: bool = True,
+    tile_size: int = 16,
+    backgrounds: Optional[Tensor] = None,
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    sparse_grad: bool = False,
+    absgrad: bool = False,
+    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    channel_chunk: int = 32,
+    distributed: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    covars: Optional[Tensor] = None,
+) -> Tuple[Tensor, Dict]:
+    """A version of rasterization() that fuses forward, L1 loss, and backward kernels.
+
+    .. note::
+        Gradients of input tensors are still accessible the `.grad` attribute after
+        `loss.backward()`.
+
+    Returns:
+        A tuple:
+
+        **l1_loss**: The L1 loss (scalar) evaluated from
+        :math:`||rendered - reference||_1`.
+
+        **meta**: A dictionary of intermediate results of the rasterization.
+    """
+    # TODO[tinyml] implement
+    render_colors, _, meta = rasterization(
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+        near_plane,
+        far_plane,
+        radius_clip,
+        eps2d,
+        sh_degree,
+        packed,
+        tile_size,
+        backgrounds,
+        render_mode,
+        sparse_grad,
+        absgrad,
+        rasterize_mode,
+        channel_chunk,
+        distributed,
+        camera_model,
+        covars,
+    )
+    return F.l1_loss(render_colors - reference_colors), meta
+
+
 def rasterization_inria_wrapper(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
