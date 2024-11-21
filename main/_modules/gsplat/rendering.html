@@ -1203,6 +1203,79 @@
 <span class="c1">#     return render_colors, render_alphas, {}</span>
 
 
+<span class="k">def</span> <span class="nf">rasterization_fused</span><span class="p">(</span>
+    <span class="n">reference_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="c1"># [C, height, width, X]</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [(C,) N, D] or [(C,) N, K, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">near_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
+    <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
+    <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
+    <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;A version of rasterization() that fuses forward, L1 loss, and backward kernels.</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        Gradients of input tensors are still accessible the `.grad` attribute after</span>
+<span class="sd">        `loss.backward()`.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        **l1_loss**: The L1 loss (scalar) evaluated from</span>
+<span class="sd">        :math:`||rendered - reference||_1`.</span>
+
+<span class="sd">        **meta**: A dictionary of intermediate results of the rasterization.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># TODO[tinyml] implement</span>
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">rasterization</span><span class="p">(</span>
+        <span class="n">means</span><span class="p">,</span>
+        <span class="n">quats</span><span class="p">,</span>
+        <span class="n">scales</span><span class="p">,</span>
+        <span class="n">opacities</span><span class="p">,</span>
+        <span class="n">colors</span><span class="p">,</span>
+        <span class="n">viewmats</span><span class="p">,</span>
+        <span class="n">Ks</span><span class="p">,</span>
+        <span class="n">width</span><span class="p">,</span>
+        <span class="n">height</span><span class="p">,</span>
+        <span class="n">near_plane</span><span class="p">,</span>
+        <span class="n">far_plane</span><span class="p">,</span>
+        <span class="n">radius_clip</span><span class="p">,</span>
+        <span class="n">eps2d</span><span class="p">,</span>
+        <span class="n">sh_degree</span><span class="p">,</span>
+        <span class="n">packed</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">backgrounds</span><span class="p">,</span>
+        <span class="n">render_mode</span><span class="p">,</span>
+        <span class="n">sparse_grad</span><span class="p">,</span>
+        <span class="n">absgrad</span><span class="p">,</span>
+        <span class="n">rasterize_mode</span><span class="p">,</span>
+        <span class="n">channel_chunk</span><span class="p">,</span>
+        <span class="n">distributed</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">,</span>
+        <span class="n">covars</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">F</span><span class="o">.</span><span class="n">l1_loss</span><span class="p">(</span><span class="n">render_colors</span> <span class="o">-</span> <span class="n">reference_colors</span><span class="p">),</span> <span class="n">meta</span>
+
+
 <div class="viewcode-block" id="rasterization_inria_wrapper">
 <a class="viewcode-back" href="../../apis/utils.html#gsplat.rasterization_inria_wrapper">[docs]</a>
 <span class="k">def</span> <span class="nf">rasterization_inria_wrapper</span><span class="p">(</span>
