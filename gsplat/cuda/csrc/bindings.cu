@@ -346,11 +346,12 @@ torch::Tensor get_tile_bin_edges_tensor(
     return tile_bins;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
+    const float visibility_thresh,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
@@ -389,6 +390,14 @@ rasterize_forward_tensor(
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
+    torch::Tensor visibility = torch::empty(
+        {0}, xys.options().dtype(torch::kBool)
+    );
+    if (visibility_thresh >= 0) {
+        visibility = torch::zeros(
+            {colors.size(0)}, xys.options().dtype(torch::kBool)
+        );
+    }
     torch::Tensor final_Ts = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kFloat32)
     );
@@ -400,6 +409,7 @@ rasterize_forward_tensor(
         rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
             tile_bounds_dim3,
             img_size_dim3,
+            visibility_thresh,
             gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
             (int2 *)tile_bins.contiguous().data_ptr<int>(),
             (float2 *)xys.contiguous().data_ptr<float>(),
@@ -409,15 +419,120 @@ rasterize_forward_tensor(
             final_Ts.contiguous().data_ptr<float>(),
             final_idx.contiguous().data_ptr<int>(),
             (float3 *)out_img.contiguous().data_ptr<float>(),
+            visibility_thresh >= 0 ? (bool *)visibility.contiguous().data_ptr<bool>() : nullptr,
             *(float3 *)background.contiguous().data_ptr<float>()
         );
     } else {
         out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
     }
 
+    return std::make_tuple(out_img, final_Ts, final_idx, visibility);
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &conics,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background
+) {
+    auto [out_img, final_Ts, final_idx, visibility] = rasterize_forward_tensor(
+        tile_bounds, block, img_size, -1.0f, gaussian_ids_sorted, tile_bins, xys, conics, colors, opacities, background);
+
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
 
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+nd_rasterize_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float visibility_thresh,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &conics,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background
+) {
+    CHECK_INPUT(gaussian_ids_sorted);
+    CHECK_INPUT(tile_bins);
+    CHECK_INPUT(xys);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(background);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int channels = colors.size(1);
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    torch::Tensor out_img = torch::zeros(
+        {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
+    );
+    torch::Tensor visibility = torch::empty(
+        {0}, xys.options().dtype(torch::kBool)
+    );
+    if (visibility_thresh >= 0) {
+        visibility = torch::zeros(
+            {colors.size(0)}, xys.options().dtype(torch::kBool)
+        );
+    }
+    torch::Tensor final_Ts = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
+    );
+    torch::Tensor final_idx = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kInt32)
+    );
+
+    if (gaussian_ids_sorted.size(0) > 0) {
+        nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3,
+            img_size_dim3,
+            channels,
+            visibility_thresh,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            out_img.contiguous().data_ptr<float>(),
+            visibility_thresh >= 0 ? (bool *)visibility.contiguous().data_ptr<bool>() : nullptr,
+            background.contiguous().data_ptr<float>()
+        );
+    } else {
+        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
+    }
+
+    return std::make_tuple(out_img, final_Ts, final_idx, visibility);
+}
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 nd_rasterize_forward_tensor(
@@ -432,67 +547,11 @@ nd_rasterize_forward_tensor(
     const torch::Tensor &opacities,
     const torch::Tensor &background
 ) {
-    CHECK_INPUT(gaussian_ids_sorted);
-    CHECK_INPUT(tile_bins);
-    CHECK_INPUT(xys);
-    CHECK_INPUT(conics);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(background);
-
-    dim3 tile_bounds_dim3;
-    tile_bounds_dim3.x = std::get<0>(tile_bounds);
-    tile_bounds_dim3.y = std::get<1>(tile_bounds);
-    tile_bounds_dim3.z = std::get<2>(tile_bounds);
-
-    dim3 block_dim3;
-    block_dim3.x = std::get<0>(block);
-    block_dim3.y = std::get<1>(block);
-    block_dim3.z = std::get<2>(block);
-
-    dim3 img_size_dim3;
-    img_size_dim3.x = std::get<0>(img_size);
-    img_size_dim3.y = std::get<1>(img_size);
-    img_size_dim3.z = std::get<2>(img_size);
-
-    const int channels = colors.size(1);
-    const int img_width = img_size_dim3.x;
-    const int img_height = img_size_dim3.y;
-
-    torch::Tensor out_img = torch::zeros(
-        {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
-    );
-    torch::Tensor final_Ts = torch::zeros(
-        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
-    );
-    torch::Tensor final_idx = torch::zeros(
-        {img_height, img_width}, xys.options().dtype(torch::kInt32)
-    );
-
-    if (gaussian_ids_sorted.size(0) > 0) {
-        nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-            tile_bounds_dim3,
-            img_size_dim3,
-            channels,
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float2 *)xys.contiguous().data_ptr<float>(),
-            (float3 *)conics.contiguous().data_ptr<float>(),
-            colors.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            final_Ts.contiguous().data_ptr<float>(),
-            final_idx.contiguous().data_ptr<int>(),
-            out_img.contiguous().data_ptr<float>(),
-            background.contiguous().data_ptr<float>()
-        );
-    } else {
-        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
-    }
+    auto [out_img, final_Ts, final_idx, visibility] = nd_rasterize_forward_tensor(
+        tile_bounds, block, img_size, -1.0f, gaussian_ids_sorted, tile_bins, xys, conics, colors, opacities, background);
 
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
-
-
 
 std::
     tuple<

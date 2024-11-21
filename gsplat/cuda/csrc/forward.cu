@@ -167,6 +167,7 @@ __global__ void nd_rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
+    const float visibility_thresh,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -176,6 +177,7 @@ __global__ void nd_rasterize_forward(
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float* __restrict__ out_img,
+    bool* __restrict__ visibilities,
     const float* __restrict__ background
 ) {
     // current naive implementation where tile data loading is redundant
@@ -233,6 +235,12 @@ __global__ void nd_rasterize_forward(
         for (int c = 0; c < channels; ++c) {
             out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
         }
+
+
+        if (visibilities != nullptr && T >= visibility_thresh) {
+            visibilities[g] = true;
+        }
+
         T = next_T;
     }
     final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
@@ -248,6 +256,7 @@ __global__ void nd_rasterize_forward(
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float visibility_thresh,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -257,6 +266,7 @@ __global__ void rasterize_forward(
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
+    bool* __restrict__ visibilities,
     const float3& __restrict__ background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -351,6 +361,11 @@ __global__ void rasterize_forward(
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
+
+            if (visibilities != nullptr && T >= visibility_thresh) {
+                visibilities[g] = true;
+            }
+
             T = next_T;
             cur_idx = batch_start + t;
         }

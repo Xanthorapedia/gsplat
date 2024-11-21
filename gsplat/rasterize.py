@@ -1,6 +1,6 @@
 """Python bindings for custom Cuda functions"""
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from jaxtyping import Float, Int
@@ -22,7 +22,8 @@ def rasterize_gaussians(
     img_height: int,
     img_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
-) -> Tensor:
+    visibility_thresh: Optional[float] = None,
+) -> Tuple[Tensor, ...]:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
@@ -75,6 +76,7 @@ def rasterize_gaussians(
         img_height,
         img_width,
         background.contiguous(),
+        visibility_thresh
     )
 
 
@@ -94,6 +96,7 @@ class _RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
+        visibility_thresh: Optional[float] = None,
     ) -> Tensor:
         num_points = xys.size(0)
         BLOCK_X, BLOCK_Y = 16, 16
@@ -121,18 +124,34 @@ class _RasterizeGaussians(Function):
             rasterize_fn = _C.rasterize_forward
         else:
             rasterize_fn = _C.nd_rasterize_forward
-        out_img, final_Ts, final_idx = rasterize_fn(
-            tile_bounds,
-            block,
-            img_size,
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            background,
-        )
+
+        if visibility_thresh is not None:
+            out_img, final_Ts, final_idx, visibility = rasterize_fn(
+                tile_bounds,
+                block,
+                img_size,
+                visibility_thresh,
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+            )
+        else:
+            out_img, final_Ts, final_idx = rasterize_fn(
+                tile_bounds,
+                block,
+                img_size,
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+            )
 
         ctx.img_width = img_width
         ctx.img_height = img_height
@@ -148,10 +167,13 @@ class _RasterizeGaussians(Function):
             final_idx,
         )
 
-        return out_img
+        if visibility_thresh is not None:
+            return out_img, visibility, gaussian_ids_sorted, tile_bins, final_idx
+        else:
+            return out_img, None, gaussian_ids_sorted, tile_bins, final_idx
 
     @staticmethod
-    def backward(ctx, v_out_img):
+    def backward(ctx, v_out_img, v_visibility, v_gaussian_ids_sorted, v_tile_bins, v_final_idx):
         img_height = ctx.img_height
         img_width = ctx.img_width
 
@@ -197,4 +219,5 @@ class _RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # background
+            None,  # visibility_thresh
         )

@@ -11,6 +11,7 @@ PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 def cuda_toolkit_available():
+    return True
     """Check if the nvcc is avaiable on the machine."""
     try:
         call(["nvcc"], stdout=DEVNULL, stderr=DEVNULL)
