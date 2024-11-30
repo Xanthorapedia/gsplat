@@ -447,7 +447,8 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-) -> Tuple[Tensor, Tensor]:
+    ref_color: Optional[Tensor] = None,
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -548,24 +549,42 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
-        means2d.contiguous(),
-        conics.contiguous(),
-        colors.contiguous(),
-        opacities.contiguous(),
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        isect_offsets.contiguous(),
-        flatten_ids.contiguous(),
-        absgrad,
-    )
+    if ref_color is not None:
+        render_colors, render_alphas, losses = _RasterizeToPixelsFused.apply(
+            means2d.contiguous(),
+            conics.contiguous(),
+            colors.contiguous(),
+            opacities.contiguous(),
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets.contiguous(),
+            flatten_ids.contiguous(),
+            absgrad,
+            ref_color.contiguous(),
+        )
+    else:
+        render_colors, render_alphas = _RasterizeToPixels.apply(
+            means2d.contiguous(),
+            conics.contiguous(),
+            colors.contiguous(),
+            opacities.contiguous(),
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets.contiguous(),
+            flatten_ids.contiguous(),
+            absgrad,
+        )
+        losses = None
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, losses
 
 
 @torch.no_grad()
@@ -1025,6 +1044,120 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
             None,
             None,
+        )
+
+
+class _RasterizeToPixelsFused(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+            ctx,
+            means2d: Tensor,  # [C, N, 2]
+            conics: Tensor,  # [C, N, 3]
+            colors: Tensor,  # [C, N, D]
+            opacities: Tensor,  # [C, N]
+            backgrounds: Tensor,  # [C, D], Optional
+            masks: Tensor,  # [C, tile_height, tile_width], Optional
+            width: int,
+            height: int,
+            tile_size: int,
+            isect_offsets: Tensor,  # [C, tile_height, tile_width]
+            flatten_ids: Tensor,  # [n_isects]
+            absgrad: bool,
+            ref_color: Tensor,  # [C, H, W, D]
+    ) -> Tuple[Tensor, Tensor]:
+        render_colors, render_alphas, last_ids, losses, v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities = (
+            _make_lazy_cuda_func("rasterize_to_pixels_fused")(
+                # Gaussian parameters
+                means2d,
+                conics,
+                colors,
+                opacities,
+                backgrounds,
+                masks,
+                # image size
+                width,
+                height,
+                tile_size,
+                # intersections
+                isect_offsets,
+                flatten_ids,
+                # whether to return forward outputs
+                False,  # render_colors
+                False,  # render_alphas
+                False,  # last_ids
+                # reference
+                ref_color,
+                # gradients of outputs
+                None,  # v_render_colors
+                None,  # v_render_alphas
+                absgrad,
+            )
+        )
+
+        C, H, W, D = ref_color.shape
+        if render_colors is None:
+            render_colors = torch.zeros(C, H, W, D).to(means2d.device)
+        if render_alphas is None:
+            render_alphas = torch.zeros(C, H, W, 1).to(means2d.device)
+
+        ctx.save_for_backward(
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+        )
+        # Save for absgrad
+        ctx.absgrad = absgrad
+        ctx.means2d = means2d
+
+        # double to float
+        render_alphas = render_alphas.float()
+        return render_colors, render_alphas, losses
+
+    @staticmethod
+    def backward(
+            ctx,
+            v_render_colors: Tensor,  # [C, H, W, 3]
+            v_render_alphas: Tensor,  # [C, H, W, 1],
+            losses: Tensor  # []
+    ):
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+        ) = ctx.saved_tensors
+        absgrad = ctx.absgrad
+
+        if absgrad:
+            ctx.means2d.absgrad = v_means2d_abs
+
+        if ctx.needs_input_grad[4]:
+            raise NotImplementedError("Gradient to background not implemented.")
+            # v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+            #     dim=(1, 2)
+            # )
+        else:
+            v_backgrounds = None
+
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,  # masks
+            None,  # width
+            None,  # height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # absgrad
+            None,  # ref_color
         )
 
 
