@@ -322,8 +322,6 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
         print(tabulate(collection, headers, tablefmt="rst"))
 
 
-# TODO[tinyml] Support single-threaded profiling (simplistic implementation) with warm up
-
 
 if __name__ == "__main__":
     import argparse
@@ -368,7 +366,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Record memory history and dump a snapshot. Use https://pytorch.org/memory_viz to visualize.",
     )
+    # TODO[tinyml] Support single-threaded profiling (simplistic implementation) with warm up
+    # implemented via new flag
+    parser.add_argument(
+        "--single_threaded",
+        type=bool,
+        default=False,
+        help="Limit profiling to single thread",
+    )
+
     args = parser.parse_args()
+    # print("args: ", args)
     if args.memory_history:
         args.repeats = 1  # only run once for memory history
 

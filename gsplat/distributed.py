@@ -329,8 +329,8 @@ def cli(fn: Callable, args: Any, verbose: bool = False) -> bool:
         )
 
     world_size = torch.cuda.device_count()
-    distributed = world_size > 1
-
+    distributed = (not args.single_threaded) and world_size > 1
+    
     if distributed:
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(_find_free_port())
