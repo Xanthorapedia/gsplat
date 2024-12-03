@@ -10,7 +10,7 @@ from typing import Optional
 
 import pytest
 import torch
-
+import torch.nn.functional as F
 device = torch.device("cuda:0")
 
 
@@ -90,3 +90,53 @@ def test_fused_rasterization(
     torch.testing.assert_close(alphas, _alphas, rtol=1e-4, atol=1e-4)
 
     # TODO[tinyml]: Tests for backward (L1 loss only)
+    if render_mode == "D":
+        dim=1
+    elif render_mode == "RGB":
+        dim=3 
+    elif render_mode == "RGB+D":
+        dim=4   
+    ref_color= torch.randn(C,height,width,dim)
+    l1_loss= F.l1_loss(renders, ref_color) 
+    l1_loss.backward()
+    means_grad=means.grad
+    quats_grad=quats.grad
+    scales_grad=scales.grad
+    opacities_grad= opacities.grad
+    colors_grad=colors.grad
+    renders_fused, alphas_fused, meta_fused = rasterization(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        sh_degree=sh_degree,
+        render_mode=render_mode,
+        packed=packed,
+        ref_color=ref_color
+    )
+    l1_loss_fused= meta_fused["render_loss"]
+    l1_loss_fused.backward()
+    means_grad_fused=means.grad
+    quats_grad_fused=quats.grad
+    scales_grad_fused=scales.grad
+    opacities_grad_fused= opacities.grad
+    colors_grad_fused=colors.grad
+    torch.testing.assert_close(l1_loss, l1_loss_fused, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(means_grad, means_grad_fused, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(quats_grad,quats_grad_fused,rtol=1e-4,atol=1e-4)
+    torch.testing.assert_close(scales_grad,scales_grad_fused,rtol=1e-4,atol=1e-4)
+    torch.testing.assert_close(opacities_grad,opacities_grad_fused,rtol=1e-4,atol=1e-4)
+    torch.testing.assert_close(colors_grad,colors_grad_fused,rtol=1e-4,atol=1e-4)
+
+
+
+
+    
+
+
+
