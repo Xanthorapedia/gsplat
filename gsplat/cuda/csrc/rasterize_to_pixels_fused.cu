@@ -77,6 +77,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
+    tile_offsets += camera_id * tile_height * tile_width;
     if (render_colors_out != nullptr) {
         render_colors_out += camera_id * image_height * image_width * COLOR_DIM;
     }
