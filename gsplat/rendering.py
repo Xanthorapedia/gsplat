@@ -51,7 +51,8 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
-    ref_color: Optional[Tensor] = None,
+    fused_kernel_ref_color: Optional[Tensor] = None,
+    fused_kernel_out_color_and_alpha: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -182,6 +183,13 @@ def rasterization(
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
+        fused_kernel_ref_color: Optional reference color for computing the loss with fused kernel.
+            If provided, kernel fusion will be enabled and the backward will be overriden. Default
+            is None.
+        fused_kernel_out_color_and_alpha: Whether to return valid rendered color and alpha from
+            fused kernel. If `fused_kernel_ref_color` is not provided, this argument is ignored.
+            If `False`, all-zero tensors of the corresponding size will be returned for
+            `render_colors` and `render_alphas`.
 
     Returns:
         A tuple:
@@ -550,7 +558,8 @@ def rasterization(
                 backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
-                ref_color=ref_color,
+                fused_kernel_ref_color=fused_kernel_ref_color,
+                fused_kernel_out_color_and_alpha=fused_kernel_out_color_and_alpha,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -573,7 +582,8 @@ def rasterization(
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,
-            ref_color=ref_color,
+            fused_kernel_ref_color=fused_kernel_ref_color,
+            fused_kernel_out_color_and_alpha=fused_kernel_out_color_and_alpha,
         )
         meta["render_loss"] = render_losses
     if render_mode in ["ED", "RGB+ED"]:

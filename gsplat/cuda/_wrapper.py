@@ -447,7 +447,8 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-    ref_color: Optional[Tensor] = None,
+    fused_kernel_ref_color: Optional[Tensor] = None,
+    fused_kernel_out_color_and_alpha: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -465,6 +466,13 @@ def rasterize_to_pixels(
         masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        fused_kernel_ref_color: Optional reference color for computing the loss with fused kernel.
+            If provided, kernel fusion will be enabled and the backward will be overriden. Default
+            is None.
+        fused_kernel_out_color_and_alpha: Whether to return valid rendered color and alpha from
+            fused kernel. If `fused_kernel_ref_color` is not provided, this argument is ignored.
+            If `False`, all-zero tensors of the corresponding size will be returned for
+            `render_colors` and `render_alphas`.
 
     Returns:
         A tuple:
@@ -549,7 +557,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    if ref_color is not None:
+    if fused_kernel_ref_color is not None:
         render_colors, render_alphas, losses = _RasterizeToPixelsFused.apply(
             means2d.contiguous(),
             conics.contiguous(),
@@ -563,7 +571,8 @@ def rasterize_to_pixels(
             isect_offsets.contiguous(),
             flatten_ids.contiguous(),
             absgrad,
-            ref_color.contiguous(),
+            fused_kernel_ref_color.contiguous(),
+            fused_kernel_out_color_and_alpha,
         )
     else:
         render_colors, render_alphas = _RasterizeToPixels.apply(
@@ -1066,6 +1075,7 @@ class _RasterizeToPixelsFused(torch.autograd.Function):
             flatten_ids: Tensor,  # [n_isects]
             absgrad: bool,
             ref_color: Tensor,  # [C, H, W, D]
+            out_color_and_alpha: bool
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids, losses, v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities = (
             _make_lazy_cuda_func("rasterize_to_pixels_fused")(
@@ -1084,8 +1094,8 @@ class _RasterizeToPixelsFused(torch.autograd.Function):
                 isect_offsets,
                 flatten_ids,
                 # whether to return forward outputs
-                False,  # render_colors
-                False,  # render_alphas
+                out_color_and_alpha,  # render_colors
+                out_color_and_alpha,  # render_alphas
                 False,  # last_ids
                 # reference
                 ref_color,
@@ -1158,6 +1168,7 @@ class _RasterizeToPixelsFused(torch.autograd.Function):
             None,  # flatten_ids
             None,  # absgrad
             None,  # ref_color
+            None,  # out_color_and_alpha
         )
 
 
