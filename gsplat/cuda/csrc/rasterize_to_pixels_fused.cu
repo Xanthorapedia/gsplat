@@ -20,10 +20,8 @@ __inline__ __device__ void l1_loss_grad(
     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         S diff = input[k] - reference[k];
 
-        char sign = diff < 0 ? -1 : 0;
-        sign = diff > 0 ? 1 : sign;
-
-        grad[k] = sign * scale;
+        S val = diff < 0 ? -scale : 0;
+        grad[k] = diff > 0 ? scale : val;
     }
 }
 
@@ -272,14 +270,22 @@ __global__ void rasterize_to_pixels_fused_kernel(
     S v_render_a;
 
     // Compute gradient (assuming L1 averaged over all channels of all pixels)
-    S factor = 1.0f / (float) (image_height * image_width * C * COLOR_DIM);
-    l1_loss_grad<COLOR_DIM, S>(
-        render_color,
-        &ref_colors[pix_id * COLOR_DIM],
-        factor,
-        v_render_c
-    );
-    v_render_a = 0;
+    if (inside) {
+        S factor = 1.0f / (float) (image_height * image_width * C * COLOR_DIM);
+        l1_loss_grad<COLOR_DIM, S>(
+            render_color,
+            &ref_colors[pix_id * COLOR_DIM],
+            factor,
+            v_render_c
+        );
+        v_render_a = 0;
+    } else {
+        GSPLAT_PRAGMA_UNROLL
+        for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+            v_render_c[k] = 0;
+        }
+        v_render_a = 0;
+    }
 
     // Override gradient if provided
     if (v_render_colors != nullptr) {
