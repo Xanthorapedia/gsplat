@@ -135,7 +135,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
     uint32_t num_batches =
         (range_end - range_start + block_size - 1) / block_size;
 
-    // TODO restrict
+    // TODO[tinyml] restrict
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
     vec3<S> *xy_opacity_batch =
@@ -143,14 +143,13 @@ __global__ void rasterize_to_pixels_fused_kernel(
     vec3<S> *conic_batch =
         reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
         ); // [block_size]
-    S *__restrict__ render_colors_batch =
-        reinterpret_cast<S *>(&conic_batch[block_size]);
-    S *__restrict__ render_alphas_batch =
-        reinterpret_cast<S *>(&render_colors_batch[block_size * COLOR_DIM]);
-    int32_t *__restrict__ last_ids =
-        reinterpret_cast<int32_t *>(&render_alphas_batch[block_size]);
-    // S *__restrict__ ref_colors_batch =
-    //     reinterpret_cast<S *>(&last_ids[block_size]);
+    S *__restrict__ colors_batch =
+        reinterpret_cast<S *>(&conic_batch[block_size]
+        ); // [block_size * COLOR_DIM]
+
+    // Fwd output buffers for the current pixel
+    S render_color[COLOR_DIM], render_alpha;
+    int32_t last_id;
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -184,6 +183,10 @@ __global__ void rasterize_to_pixels_fused_kernel(
             const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                colors_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
+            }
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -210,12 +213,10 @@ __global__ void rasterize_to_pixels_fused_kernel(
                 break;
             }
 
-            int32_t g = id_batch[t];
             const S vis = alpha * T;
-            const S *c_ptr = colors + g * COLOR_DIM;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                pix_out[k] += c_ptr[k] * vis;
+                pix_out[k] += colors_batch[t * COLOR_DIM + k] * vis;
             }
             cur_idx = batch_start + t;
 
@@ -229,29 +230,29 @@ __global__ void rasterize_to_pixels_fused_kernel(
         // pass and it can be very small and causing large diff in gradients
         // with float32. However, double precision makes the backward pass 1.5x
         // slower so we stick with float for now.
-        render_alphas_batch[tr] = 1.0f - T;
+        render_alpha = 1.0f - T;
         GSPLAT_PRAGMA_UNROLL
         for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-            render_colors_batch[tr * COLOR_DIM + k] =
+            render_color[k] =
                 backgrounds == nullptr ? pix_out[k]
                                        : (pix_out[k] + T * backgrounds[k]);
         }
         // index in bin of last gaussian in this pixel
-        last_ids[tr] = static_cast<int32_t>(cur_idx);
+        last_id = static_cast<int32_t>(cur_idx);
 
         // Write back if requested
         if (render_alphas_out != nullptr) {
-            render_alphas_out[pix_id] = render_alphas_batch[tr];
+            render_alphas_out[pix_id] = render_alpha;
         }
         if (render_colors_out != nullptr) {
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 render_colors_out[pix_id * COLOR_DIM + k] =
-                    render_colors_batch[tr * COLOR_DIM + k];
+                    render_color[k];
             }
         }
         if (last_ids_out != nullptr) {
-            last_ids_out[pix_id] = last_ids[tr];
+            last_ids_out[pix_id] = last_id;
         }
     }
 
@@ -259,12 +260,12 @@ __global__ void rasterize_to_pixels_fused_kernel(
     // * Rasterization to Pixels Backward Pass
     // *************************************************************************
     // this is the T AFTER the last gaussian in this pixel
-    S T_final = 1.0f - render_alphas_batch[tr];
+    S T_final = 1.0f - render_alpha;
     T = T_final;
     // the contribution from gaussians behind the current one
     S buffer[COLOR_DIM] = {0.f};
     // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = inside ? last_ids[tr] : 0;
+    const int32_t bin_final = inside ? last_id : 0;
 
     // df/d_out for this pixel
     S v_render_c[COLOR_DIM];
@@ -273,7 +274,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
     // Compute gradient (assuming L1 averaged over all channels of all pixels)
     S factor = 1.0f / (float) (image_height * image_width * C * COLOR_DIM);
     l1_loss_grad<COLOR_DIM, S>(
-        &render_colors_batch[tr * COLOR_DIM],
+        render_color,
         &ref_colors[pix_id * COLOR_DIM],
         factor,
         v_render_c
@@ -315,7 +316,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
             conic_batch[tr] = conics[g];
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                render_colors_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
+                colors_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
             }
         }
         // wait for other threads to collect the gaussians in batch
@@ -373,7 +374,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
                 S v_alpha = 0.f;
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_alpha +=
-                        (render_colors_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
+                        (colors_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
                         v_render_c[k];
                 }
 
@@ -407,7 +408,7 @@ __global__ void rasterize_to_pixels_fused_kernel(
 
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    buffer[k] += render_colors_batch[t * COLOR_DIM + k] * fac;
+                    buffer[k] += colors_batch[t * COLOR_DIM + k] * fac;
                 }
             }
             warpSum<COLOR_DIM, S>(v_rgb_local, warp);
@@ -551,13 +552,11 @@ call_kernel_with_dim(
 
     if (n_isects) {
         // int32_t id_batch, vec3<S> xy_opacity_batch, vec3<S> conic_batch
-        // float render_colors_batch[COLOR_DIM],
-        // float ref_colors_batch[COLOR_DIM], float render_alphas_batch
+        // S colors_batch[COLOR_DIM],
         const uint32_t shared_mem =
             tile_size * tile_size *
             (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>) +
-             sizeof(float) * COLOR_DIM + sizeof(float) * COLOR_DIM +
-             sizeof(float));
+             sizeof(float) * COLOR_DIM);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
         if (cudaFuncSetAttribute(
