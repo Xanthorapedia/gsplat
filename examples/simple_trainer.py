@@ -164,6 +164,9 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
+    single_threaded: bool = False
+
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -1063,6 +1066,15 @@ if __name__ == "__main__":
             "Gaussian splatting training using densification heuristics from the original paper.",
             Config(
                 strategy=DefaultStrategy(verbose=True),
+                single_threaded=False,
+                ssim_lambda=0, # default for kernel fused implementation uses not ssim loss
+            ),
+        ),
+        "default-with-ssim-loss": (
+            "Gaussian splatting training using densification heuristics from the original paper.",
+            Config(
+                strategy=DefaultStrategy(verbose=True),
+                single_threaded=False,
             ),
         ),
         "mcmc": (
@@ -1073,11 +1085,13 @@ if __name__ == "__main__":
                 opacity_reg=0.01,
                 scale_reg=0.01,
                 strategy=MCMCStrategy(verbose=True),
+                single_threaded=False,
             ),
         ),
     }
     cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
+    print(cfg)
 
     # try import extra dependencies
     if cfg.compression == "png":

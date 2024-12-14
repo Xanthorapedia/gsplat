@@ -1,3 +1,19 @@
+# Kernel Fusion for Cache-friendly Gaussian Splatting on Mobile Devices
+Fall 2024 6.5940 Final Project by 
+
+Although Gaussian Splatting (GS) allows for high-fidelity reconstruction of 3D scenes, the current GS implementations are not optimized to reduce DRAM accesses during training, making GS difficult to deploy on memory-constrained devices. In this project, we propose to reduce the DRAM traffic by fusing the forward and backward kernels of GS during training. Our method enables intermediate results from forward to be stored and consumed within shared memory rather than written to DRAM. 
+
+
+## Project Demo and Experiment Scripts
+The subsequent gsplat section belows explain how to set up the gsplat package. Make sure gsplat is properly installed before running the demo.
+
+Navigate to `./examples/benchmarks/`. Run `basic_garden_original.sh` to train a gaussian splat model on the Mip-NeRF360 Garden scene using combination of L1 and SSIM loss (traditional gaussian splatting). Run `basic_garden_no_ssim.sh` to train gaussian splat model on the same scene using only L1 loss, as our kernel fused implementation uses. Checkpoints at 7k and 30k training steps as well as a video in the scene along a fixed trajectory are saved into respective results directories. This duplicates our results from Table 3 in our paper.
+
+The trained GSs can be viewed interactively by running ```python simple_viewer.py --ckpt <results-dir>/ckpt_<num-steps>_rank0.pt --backend gsplat```. This duplicates our results from Table 3 in our paper.
+
+In general, training and viewing our implementation can be done with the `./examples/simple_trainer.py` script, which has usage instructions at the bottom of the file.
+
+
 # gsplat
 
 [![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
