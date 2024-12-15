@@ -1,7 +1,7 @@
 # Kernel Fusion for Cache-friendly Gaussian Splatting on Mobile Devices
 Fall 2024 6.5940 Final Project by Dasong Gao, Jungsoo Lee, Sarah Zhang
 
-Although Gaussian Splatting (GS) allows for high-fidelity reconstruction of 3D scenes, the current GS implementations are not optimized to reduce DRAM accesses during training, making GS difficult to deploy on memory-constrained devices. In this project, we propose to reduce the DRAM traffic by fusing the forward and backward kernels of GS during training. Our method enables intermediate results from forward to be stored and consumed within shared memory rather than written to DRAM. 
+Although Gaussian Splatting (GS) allows for high-fidelity reconstruction of 3D scenes, the current GS implementations are not optimized to reduce DRAM accesses during training, making GS difficult to deploy on memory-constrained devices. In this project, we propose to reduce the DRAM traffic by fusing the forward and backward kernels of GS during training. Our method enables intermediate results from forward to be stored and consumed within shared memory rather than written to DRAM.
 
 
 ## Project Demo and Experiment Scripts
@@ -14,21 +14,54 @@ The trained GSs can be viewed interactively by running ```python simple_viewer.p
 In general, training and viewing our implementation can be done with the `./examples/simple_trainer.py` script, which has usage instructions at the bottom of the file.
 
 ## Profiling Experiments
-Our profiling experiments, which profiles the 50th iteration, using Nvidia Nsight Compute can be replicated with the following commands:
-```
-# fused kernels:
-ncu --config-file off --export "./gsplatting/%i" --force-overwrite --kernel-name regex:^rasterize_to_pixels_ \
---launch-skip 50 --launch-count 2 --kill 1 --set full /path/to/python simple_trainer.py default --eval_steps -1 \
---disable_viewer --data_factor 4 --render_traj_path ellipse --data_dir data/360_v2/garden/ \
---result_dir results/fused/benchmark/garden/ --fused 
+We use the [NVIDIA Nsight Compute](https://developer.nvidia.com/nsight-compute) to profile the 51th iteration from the start of the training.
 
-# unfused (original):
+To profile the unfused (original, forward+backward) implementation:
+```sh
+cd examples
 ncu --config-file off --export "./gsplatting/%i" --force-overwrite --kernel-name regex:^rasterize_to_pixels_ \
 --launch-skip 100 --launch-count 2 --kill 1 --set full /path/to/python simple_trainer.py default --eval_steps -1 \
 --disable_viewer --data_factor 4 --render_traj_path ellipse --data_dir data/360_v2/garden/ \
 --result_dir results/fused/benchmark/garden/
 ```
 
+Expected Results (profiled on NVIDIA Jetson Orin Nano (8GB)):
+
+- [`rasterize_to_pixels_fwd_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_fwd.cu)
+<a href="profiling/ncu-reports/orin-fwd.png">
+<img
+  src=profiling/ncu-reports/orin-fwd.png
+  style="width: 100%; aspect-ratio : 1.8 / 1; object-fit: cover;  object-position: 50% 26.7%;"
+/>
+</a>
+*Click image to view full report*
+- [`rasterize_to_pixels_bwd_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_bwd.cu)
+<a href="profiling/ncu-reports/orin-bwd.png">
+<img
+  src=profiling/ncu-reports/orin-bwd.png
+  style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.7%;"
+/>
+</a>
+*Click image to view full report*
+
+To profile the fused (our) implementation:
+```sh
+cd examples
+ncu --config-file off --export "./gsplatting/%i" --force-overwrite --kernel-name regex:^rasterize_to_pixels_ \
+--launch-skip 50 --launch-count 2 --kill 1 --set full /path/to/python simple_trainer.py default --eval_steps -1 \
+--disable_viewer --data_factor 4 --render_traj_path ellipse --data_dir data/360_v2/garden/ \
+--result_dir results/fused/benchmark/garden/ --fused
+```
+
+Expected Results (profiled on NVIDIA Jetson Orin Nano (8GB)):
+- Expected Results ([`rasterize_to_pixels_fused_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_fused.cu) profiled on NVIDIA Jetson Orin Nano (8GB)):
+<a href="profiling/ncu-reports/orin-fused.png">
+<img
+  src=profiling/ncu-reports/orin-fused.png
+  style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.4%;"
+/>
+</a>
+*Click image to view full report*
 
 # gsplat
 
