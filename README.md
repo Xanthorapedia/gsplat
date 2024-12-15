@@ -28,21 +28,26 @@ ncu --config-file off --export "./gsplatting/%i" --force-overwrite --kernel-name
 Expected Results (profiled on NVIDIA Jetson Orin Nano (8GB)):
 
 - [`rasterize_to_pixels_fwd_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_fwd.cu)
-<a href="profiling/ncu-reports/orin-fwd.png">
-<img
-  src=profiling/ncu-reports/orin-fwd.png
-  style="width: 100%; aspect-ratio : 1.8 / 1; object-fit: cover;  object-position: 50% 26.7%;"
-/>
-</a>
-*Click image to view full report*
+<details>
+  <summary>Report</summary>
+  <a href="profiling/ncu-reports/orin-fwd.png">
+  <img
+    src=profiling/ncu-reports/orin-fwd.png
+    style="width: 100%; aspect-ratio : 1.8 / 1; object-fit: cover;  object-position: 50% 26.7%;"
+  />
+  </a>
+</details>
+
 - [`rasterize_to_pixels_bwd_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_bwd.cu)
-<a href="profiling/ncu-reports/orin-bwd.png">
-<img
-  src=profiling/ncu-reports/orin-bwd.png
-  style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.7%;"
-/>
-</a>
-*Click image to view full report*
+<details>
+  <summary>Report</summary>
+  <a href="profiling/ncu-reports/orin-bwd.png">
+  <img
+    src=profiling/ncu-reports/orin-bwd.png
+    style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.7%;"
+  />
+  </a>
+</details>
 
 To profile the fused (our) implementation:
 ```sh
@@ -55,13 +60,15 @@ ncu --config-file off --export "./gsplatting/%i" --force-overwrite --kernel-name
 
 Expected Results (profiled on NVIDIA Jetson Orin Nano (8GB)):
 - Expected Results ([`rasterize_to_pixels_fused_kernel`](gsplat/cuda/csrc/rasterize_to_pixels_fused.cu) profiled on NVIDIA Jetson Orin Nano (8GB)):
-<a href="profiling/ncu-reports/orin-fused.png">
-<img
-  src=profiling/ncu-reports/orin-fused.png
-  style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.4%;"
-/>
-</a>
-*Click image to view full report*
+<details>
+  <summary>Report</summary>
+  <a href="profiling/ncu-reports/orin-fused.png">
+  <img
+    src=profiling/ncu-reports/orin-fused.png
+    style="width: 100%; aspect-ratio : 1.9 / 1; object-fit: cover;  object-position: 50% 25.4%;"
+  />
+  </a>
+</details>
 
 # gsplat
 
