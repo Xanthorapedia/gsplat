@@ -365,6 +365,8 @@
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">fused_kernel_ref_color</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">fused_kernel_out_color_and_alpha</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
 
@@ -495,6 +497,13 @@
 <span class="sd">            and &quot;fisheye&quot;. Default is &quot;pinhole&quot;.</span>
 <span class="sd">        covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and</span>
 <span class="sd">            `scales` will be ignored. [N, 3, 3], Default is None.</span>
+<span class="sd">        fused_kernel_ref_color: Optional reference color for computing the loss with fused kernel.</span>
+<span class="sd">            If provided, kernel fusion will be enabled and the backward will be overriden. Default</span>
+<span class="sd">            is None.</span>
+<span class="sd">        fused_kernel_out_color_and_alpha: Whether to return valid rendered color and alpha from</span>
+<span class="sd">            fused kernel. If `fused_kernel_ref_color` is not provided, this argument is ignored.</span>
+<span class="sd">            If `False`, all-zero tensors of the corresponding size will be returned for</span>
+<span class="sd">            `render_colors` and `render_alphas`.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
@@ -842,7 +851,7 @@
     <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">channel_chunk</span><span class="p">:</span>
         <span class="c1"># slice into chunks</span>
         <span class="n">n_chunks</span> <span class="o">=</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">channel_chunk</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">channel_chunk</span>
-        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_losses</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[],</span> <span class="p">[]</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_chunks</span><span class="p">):</span>
             <span class="n">colors_chunk</span> <span class="o">=</span> <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">i</span> <span class="o">*</span> <span class="n">channel_chunk</span> <span class="p">:</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">channel_chunk</span><span class="p">]</span>
             <span class="n">backgrounds_chunk</span> <span class="o">=</span> <span class="p">(</span>
@@ -850,7 +859,7 @@
                 <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
                 <span class="k">else</span> <span class="kc">None</span>
             <span class="p">)</span>
-            <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
+            <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span><span class="p">,</span> <span class="n">render_losses_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
                 <span class="n">means2d</span><span class="p">,</span>
                 <span class="n">conics</span><span class="p">,</span>
                 <span class="n">colors_chunk</span><span class="p">,</span>
@@ -863,13 +872,18 @@
                 <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds_chunk</span><span class="p">,</span>
                 <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">,</span>
                 <span class="n">absgrad</span><span class="o">=</span><span class="n">absgrad</span><span class="p">,</span>
+                <span class="n">fused_kernel_ref_color</span><span class="o">=</span><span class="n">fused_kernel_ref_color</span><span class="p">,</span>
+                <span class="n">fused_kernel_out_color_and_alpha</span><span class="o">=</span><span class="n">fused_kernel_out_color_and_alpha</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">render_colors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_colors_</span><span class="p">)</span>
             <span class="n">render_alphas</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_alphas_</span><span class="p">)</span>
+            <span class="n">render_losses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_losses_</span><span class="p">)</span>
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># discard the rest</span>
+        <span class="c1"># TODO use weighted sum instead</span>
+        <span class="n">render_losses</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">render_losses</span><span class="p">)</span> <span class="k">if</span> <span class="nb">all</span><span class="p">([</span><span class="n">chunk_loss</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">for</span> <span class="n">chunk_loss</span> <span class="ow">in</span> <span class="n">render_losses</span><span class="p">])</span> <span class="k">else</span> <span class="kc">None</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_losses</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -882,7 +896,10 @@
             <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds</span><span class="p">,</span>
             <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">,</span>
             <span class="n">absgrad</span><span class="o">=</span><span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">fused_kernel_ref_color</span><span class="o">=</span><span class="n">fused_kernel_ref_color</span><span class="p">,</span>
+            <span class="n">fused_kernel_out_color_and_alpha</span><span class="o">=</span><span class="n">fused_kernel_out_color_and_alpha</span><span class="p">,</span>
         <span class="p">)</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;render_loss&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_losses</span>
     <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
         <span class="c1"># normalize the accumulated depth to get the expected depth</span>
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>

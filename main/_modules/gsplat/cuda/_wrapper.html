@@ -782,7 +782,9 @@
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width]</span>
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+    <span class="n">fused_kernel_ref_color</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">fused_kernel_out_color_and_alpha</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
 
 <span class="sd">    Args:</span>
@@ -799,6 +801,13 @@
 <span class="sd">        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.</span>
 <span class="sd">        packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.</span>
 <span class="sd">        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.</span>
+<span class="sd">        fused_kernel_ref_color: Optional reference color for computing the loss with fused kernel.</span>
+<span class="sd">            If provided, kernel fusion will be enabled and the backward will be overriden. Default</span>
+<span class="sd">            is None.</span>
+<span class="sd">        fused_kernel_out_color_and_alpha: Whether to return valid rendered color and alpha from</span>
+<span class="sd">            fused kernel. If `fused_kernel_ref_color` is not provided, this argument is ignored.</span>
+<span class="sd">            If `False`, all-zero tensors of the corresponding size will be returned for</span>
+<span class="sd">            `render_colors` and `render_alphas`.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
@@ -883,24 +892,43 @@
         <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
     <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_RasterizeToPixels</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
-        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">backgrounds</span><span class="p">,</span>
-        <span class="n">masks</span><span class="p">,</span>
-        <span class="n">image_width</span><span class="p">,</span>
-        <span class="n">image_height</span><span class="p">,</span>
-        <span class="n">tile_size</span><span class="p">,</span>
-        <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">absgrad</span><span class="p">,</span>
-    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">fused_kernel_ref_color</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="n">_RasterizeToPixelsFused</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_width</span><span class="p">,</span>
+            <span class="n">image_height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">fused_kernel_ref_color</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">fused_kernel_out_color_and_alpha</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_RasterizeToPixels</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_width</span><span class="p">,</span>
+            <span class="n">image_height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">absgrad</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">losses</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">padded_channels</span><span class="p">]</span>
-    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span></div>
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">losses</span></div>
 
 
 
@@ -1364,6 +1392,122 @@
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">_RasterizeToPixelsFused</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians&quot;&quot;&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+            <span class="n">ctx</span><span class="p">,</span>
+            <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2]</span>
+            <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
+            <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, D]</span>
+            <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N]</span>
+            <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, D], Optional</span>
+            <span class="n">masks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width], Optional</span>
+            <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width]</span>
+            <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+            <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+            <span class="n">ref_color</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, D]</span>
+            <span class="n">out_color_and_alpha</span><span class="p">:</span> <span class="nb">bool</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">losses</span><span class="p">,</span> <span class="n">v_means2d_abs</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">,</span> <span class="n">v_opacities</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_fused&quot;</span><span class="p">)(</span>
+                <span class="c1"># Gaussian parameters</span>
+                <span class="n">means2d</span><span class="p">,</span>
+                <span class="n">conics</span><span class="p">,</span>
+                <span class="n">colors</span><span class="p">,</span>
+                <span class="n">opacities</span><span class="p">,</span>
+                <span class="n">backgrounds</span><span class="p">,</span>
+                <span class="n">masks</span><span class="p">,</span>
+                <span class="c1"># image size</span>
+                <span class="n">width</span><span class="p">,</span>
+                <span class="n">height</span><span class="p">,</span>
+                <span class="n">tile_size</span><span class="p">,</span>
+                <span class="c1"># intersections</span>
+                <span class="n">isect_offsets</span><span class="p">,</span>
+                <span class="n">flatten_ids</span><span class="p">,</span>
+                <span class="c1"># whether to return forward outputs</span>
+                <span class="n">out_color_and_alpha</span><span class="p">,</span>  <span class="c1"># render_colors</span>
+                <span class="n">out_color_and_alpha</span><span class="p">,</span>  <span class="c1"># render_alphas</span>
+                <span class="kc">False</span><span class="p">,</span>  <span class="c1"># last_ids</span>
+                <span class="c1"># reference</span>
+                <span class="n">ref_color</span><span class="p">,</span>
+                <span class="c1"># gradients of outputs</span>
+                <span class="kc">None</span><span class="p">,</span>  <span class="c1"># v_render_colors</span>
+                <span class="kc">None</span><span class="p">,</span>  <span class="c1"># v_render_alphas</span>
+                <span class="n">absgrad</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">D</span> <span class="o">=</span> <span class="n">ref_color</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">if</span> <span class="n">render_colors</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">D</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">means2d</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">render_alphas</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">means2d</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">v_means2d_abs</span><span class="p">,</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="c1"># Save for absgrad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">absgrad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">means2d</span> <span class="o">=</span> <span class="n">means2d</span>
+
+        <span class="c1"># double to float</span>
+        <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">losses</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
+            <span class="n">ctx</span><span class="p">,</span>
+            <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 3]</span>
+            <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 1],</span>
+            <span class="n">losses</span><span class="p">:</span> <span class="n">Tensor</span>  <span class="c1"># []</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">v_means2d_abs</span><span class="p">,</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">absgrad</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span>
+
+        <span class="k">if</span> <span class="n">absgrad</span><span class="p">:</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">means2d</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">v_means2d_abs</span>
+
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">4</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Gradient to background not implemented.&quot;</span><span class="p">)</span>
+            <span class="c1"># v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(</span>
+            <span class="c1">#     dim=(1, 2)</span>
+            <span class="c1"># )</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># isect_offsets</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># ref_color</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># out_color_and_alpha</span>
         <span class="p">)</span>
 
 
