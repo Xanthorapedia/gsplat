@@ -51,6 +51,8 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    fused_kernel_ref_color: Optional[Tensor] = None,
+    fused_kernel_out_color_and_alpha: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -181,6 +183,13 @@ def rasterization(
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
+        fused_kernel_ref_color: Optional reference color for computing the loss with fused kernel.
+            If provided, kernel fusion will be enabled and the backward will be overriden. Default
+            is None.
+        fused_kernel_out_color_and_alpha: Whether to return valid rendered color and alpha from
+            fused kernel. If `fused_kernel_ref_color` is not provided, this argument is ignored.
+            If `False`, all-zero tensors of the corresponding size will be returned for
+            `render_colors` and `render_alphas`.
 
     Returns:
         A tuple:
@@ -528,7 +537,7 @@ def rasterization(
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
+        render_colors, render_alphas, render_losses = [], [], []
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
@@ -536,7 +545,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, render_losses_ = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -549,13 +558,18 @@ def rasterization(
                 backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
+                fused_kernel_ref_color=fused_kernel_ref_color,
+                fused_kernel_out_color_and_alpha=fused_kernel_out_color_and_alpha,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            render_losses.append(render_losses_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
+        # TODO use weighted sum instead
+        render_losses = sum(render_losses) if all([chunk_loss is not None for chunk_loss in render_losses]) else None
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, render_losses = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -568,7 +582,10 @@ def rasterization(
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,
+            fused_kernel_ref_color=fused_kernel_ref_color,
+            fused_kernel_out_color_and_alpha=fused_kernel_out_color_and_alpha,
         )
+        meta["render_loss"] = render_losses
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(

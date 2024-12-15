@@ -42,6 +42,8 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
 
+from zeus.monitor import ZeusMonitor
+
 
 @dataclass
 class Config:
@@ -123,6 +125,9 @@ class Config:
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
+
+    # Use fused kernel
+    fused: bool = False
 
     # Opacity regularization
     opacity_reg: float = 0.0
@@ -443,6 +448,8 @@ class Runner:
                 mode="training",
             )
 
+        self.zeus_monitor = ZeusMonitor(cpu_indices=[0])
+
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
@@ -553,6 +560,8 @@ class Runner:
         )
         trainloader_iter = iter(trainloader)
 
+        self.zeus_monitor.begin_window("training")
+
         # Training loop.
         global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
@@ -604,6 +613,7 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
+                fused_kernel_ref_color=(pixels if cfg.fused else None),
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -631,12 +641,15 @@ class Runner:
                 info=info,
             )
 
-            # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
-            loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            if not cfg.fused:
+                # loss
+                l1loss = F.l1_loss(colors, pixels)
+                # ssimloss = 1.0 - fused_ssim(
+                #     colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                # )
+                loss = l1loss
+            else:
+                loss = info["render_loss"]
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -696,8 +709,8 @@ class Runner:
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
-                self.writer.add_scalar("train/l1loss", l1loss.item(), step)
-                self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                # self.writer.add_scalar("train/l1loss", l1loss.item(), step)
+                # self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
@@ -824,6 +837,18 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
+
+        energy_stats = self.zeus_monitor.end_window("training")
+        gpu_energy = sum(energy_stats.gpu_energy.values())
+        cpu_energy = sum(energy_stats.cpu_energy.values())
+        dram_energy = sum(energy_stats.dram_energy.values()) if energy_stats.dram_energy is not None else 0
+        n_iter = step + 1
+        print("Energy statistics (J):")
+        print(f"GPU: {gpu_energy} (Total), {gpu_energy / n_iter} (Per iter)")
+        print(f"CPU: {cpu_energy} (Total), {cpu_energy / n_iter} (Per iter)")
+        if energy_stats.dram_energy is not None:
+            print(f"DRAM: {dram_energy} (Total), {dram_energy / n_iter} (Per iter)")
+        print(f"Throughput: {n_iter / stats['ellipse_time']}")
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):

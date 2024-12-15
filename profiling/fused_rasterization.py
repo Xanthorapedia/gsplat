@@ -9,11 +9,12 @@ pytest <THIS_PY_FILE>
 import time
 
 import torch
+import torch.nn.functional as F
+
 from typing_extensions import Callable, Literal
 
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
-# TODO[tinyml] Replace with fused rasterization
 from gsplat.rendering import rasterization
 
 RESOLUTIONS = {
@@ -46,6 +47,7 @@ def main(
     packed: bool = True,
     sparse_grad: bool = False,
     backend: Literal["gsplat", "inria"] = "gsplat",
+    fused: bool = False,
     repeats: int = 100,
     memory_history: bool = False,
     world_rank: int = 0,
@@ -102,9 +104,18 @@ def main(
     else:
         assert False, f"Backend {backend} is not valid."
 
-    ellipse_time_fwd, outputs = timeit(
+    ref_color = torch.randn(batch_size, render_height, render_width, channels, device=device)
+
+    def bw_fw_pair_fn(*args, **kwargs):
+        rendered_color, _, meta = rasterization_fn(*args, **kwargs)
+        l1_loss = meta["render_loss"] if "render_loss" in meta else F.l1_loss(rendered_color, ref_color)
+        l1_loss.backward()
+        for v in [means, quats, scales, opacities, colors]:
+            v.grad = None
+
+    ellipse_time_fwd_bwd, outputs = timeit(
         repeats,
-        rasterization_fn,
+        bw_fw_pair_fn,
         means,  # [N, 3]
         quats,  # [N, 4]
         scales,  # [N, 3]
@@ -120,23 +131,13 @@ def main(
         radius_clip=3.0,
         sparse_grad=sparse_grad,
         distributed=world_size > 1,
+        fused_kernel_ref_color=(ref_color if fused else None),
     )
-    mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
 
-    # TODO[tinyml] the tests/metrics for backward the may not apply. Remove or fuse them with the forward if applicable
-    render_colors = outputs[0]
-    loss = render_colors.sum()
-
-    def backward():
-        loss.backward(retain_graph=True)
-        for v in [means, quats, scales, opacities, colors]:
-            v.grad = None
-
-    ellipse_time_bwd, _ = timeit(repeats, backward)
     mem_toc_all = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
     print(
-        f"Rasterization Mem Allocation: [FWD]{mem_toc_fwd:.2f} GB, [All]{mem_toc_all:.2f} GB "
-        f"Time: [FWD]{ellipse_time_fwd:.3f}s, [BWD]{ellipse_time_bwd:.3f}s "
+        # f"Rasterization Mem Allocation: [FWD]{mem_toc_fwd:.2f} GB, [All]{mem_toc_all:.2f} GB "
+        f"Time: [FWD-BWD]{ellipse_time_fwd_bwd:.3f}s "
         f"N Gaussians: {means.shape[0]}"
     )
 
@@ -146,10 +147,8 @@ def main(
         )
 
     return {
-        "mem_fwd": mem_toc_fwd,
         "mem_all": mem_toc_all,
-        "time_fwd": ellipse_time_fwd,
-        "time_bwd": ellipse_time_bwd,
+        "time_fwd_bwd": ellipse_time_fwd_bwd,
     }
 
 
@@ -165,69 +164,67 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
             print(f"Batch Size: {batch_size}, Channels: {channels}")
             print("========================================")
             if "gsplat" in args.backends:
-                print("gsplat packed[True] sparse_grad[True]")
-                for scene_grid in args.scene_grid:
-                    stats = main(
-                        batch_size=batch_size,
-                        channels=channels,
-                        reso="1080p",
-                        scene_grid=scene_grid,
-                        packed=True,
-                        sparse_grad=True,
-                        repeats=args.repeats,
-                        # only care about memory for the packed version implementation
-                        memory_history=args.memory_history,
-                        world_rank=world_rank,
-                        world_size=world_size,
-                    )
-                    collection.append(
-                        [
-                            "gsplat v1.0.0",
-                            True,
-                            True,
-                            # configs
-                            batch_size,
-                            channels,
-                            scene_grid,
-                            # stats
-                            # f"{stats['mem_fwd']:0.2f}",
-                            f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
-                        ]
-                    )
-                    torch.cuda.empty_cache()
+                # print("gsplat packed[True] sparse_grad[True]")
+                # for scene_grid in args.scene_grid:
+                #     stats = main(
+                #         batch_size=batch_size,
+                #         channels=channels,
+                #         reso="1080p",
+                #         scene_grid=scene_grid,
+                #         packed=True,
+                #         sparse_grad=True,
+                #         repeats=args.repeats,
+                #         # only care about memory for the packed version implementation
+                #         memory_history=args.memory_history,
+                #         world_rank=world_rank,
+                #         world_size=world_size,
+                #     )
+                #     collection.append(
+                #         [
+                #             "gsplat v1.0.0",
+                #             True,
+                #             True,
+                #             # configs
+                #             batch_size,
+                #             channels,
+                #             scene_grid,
+                #             # stats
+                #             # f"{stats['mem_fwd']:0.2f}",
+                #             f"{stats['mem_all']:0.2f}",
+                #             f"{1.0 / stats['time_fwd_bwd']:0.1f} x {(batch_size)}",
+                #         ]
+                #     )
+                #     torch.cuda.empty_cache()
 
-                print("gsplat packed[True] sparse_grad[False]")
-                for scene_grid in args.scene_grid:
-                    stats = main(
-                        batch_size=batch_size,
-                        channels=channels,
-                        reso="1080p",
-                        scene_grid=scene_grid,
-                        packed=True,
-                        sparse_grad=False,
-                        repeats=args.repeats,
-                        world_rank=world_rank,
-                        world_size=world_size,
-                    )
-                    collection.append(
-                        [
-                            "gsplat v1.0.0",
-                            True,
-                            False,
-                            # configs
-                            batch_size,
-                            channels,
-                            scene_grid,
-                            # stats
-                            # f"{stats['mem_fwd']:0.2f}",
-                            f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
-                        ]
-                    )
-                    torch.cuda.empty_cache()
+                # print("gsplat packed[True] sparse_grad[False]")
+                # for scene_grid in args.scene_grid:
+                #     stats = main(
+                #         batch_size=batch_size,
+                #         channels=channels,
+                #         reso="1080p",
+                #         scene_grid=scene_grid,
+                #         packed=True,
+                #         sparse_grad=False,
+                #         repeats=args.repeats,
+                #         world_rank=world_rank,
+                #         world_size=world_size,
+                #     )
+                #     collection.append(
+                #         [
+                #             "gsplat v1.0.0",
+                #             True,
+                #             False,
+                #             # configs
+                #             batch_size,
+                #             channels,
+                #             scene_grid,
+                #             # stats
+                #             # f"{stats['mem_fwd']:0.2f}",
+                #             f"{stats['mem_all']:0.2f}",
+                #             f"{1.0 / stats['time_fwd_bwd']:0.1f} x {(batch_size)}",
+                #         ]
+                #     )
+                #     torch.cuda.empty_cache()
 
                 print("gsplat packed[False] sparse_grad[False]")
                 for scene_grid in args.scene_grid:
@@ -241,6 +238,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                         repeats=args.repeats,
                         world_rank=world_rank,
                         world_size=world_size,
+                        fused=args.fused
                     )
                     collection.append(
                         [
@@ -254,8 +252,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_fwd_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
@@ -283,8 +280,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_fwd_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
@@ -360,6 +356,11 @@ if __name__ == "__main__":
         type=int,
         default=[3],
         help="Number of color channels for profiling",
+    )
+    parser.add_argument(
+        "--fused",
+        action="store_true",
+        help="Whether to use fused kernel implementation",
     )
     parser.add_argument(
         "--memory_history",
